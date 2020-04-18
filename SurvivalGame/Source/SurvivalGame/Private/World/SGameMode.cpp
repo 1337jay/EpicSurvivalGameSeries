@@ -1,29 +1,37 @@
 // Copyright 1998-2015 Epic Games, Inc. All Rights Reserved.
 
-#include "SurvivalGame.h"
-#include "SGameMode.h"
-#include "SPlayerController.h"
-#include "SPlayerState.h"
-#include "SGameState.h"
-#include "SCharacter.h"
-#include "SHUD.h"
-#include "STypes.h"
-#include "SSpectatorPawn.h"
-#include "SZombieAIController.h"
-#include "SZombieCharacter.h"
-#include "SPlayerStart.h"
-#include "SMutator.h"
-#include "SWeapon.h"
+
+#include "World/SGameMode.h"
+#include "Player/SPlayerController.h"
+#include "Player/SPlayerState.h"
+#include "World/SGameState.h"
+#include "Player/SCharacter.h"
+#include "UI/SHUD.h"
+#include "SurvivalGame/STypes.h"
+#include "Player/SSpectatorPawn.h"
+#include "AI/SZombieAIController.h"
+#include "AI/SZombieCharacter.h"
+#include "World/SPlayerStart.h"
+#include "Mutators/SMutator.h"
+#include "Items/SWeapon.h"
+#include "TimerManager.h"
+#include "Engine/Engine.h"
+#include "Kismet/GameplayStatics.h"
+#include "EngineUtils.h"
+#include "Components/CapsuleComponent.h"
+#include "Engine/LevelScriptActor.h"
+#include "SurvivalGame/SurvivalGame.h"
 
 
-ASGameMode::ASGameMode(const FObjectInitializer& ObjectInitializer)
-: Super(ObjectInitializer)
+ASGameMode::ASGameMode()
 {
 	/* Assign the class types used by this gamemode */
 	PlayerControllerClass = ASPlayerController::StaticClass();
 	PlayerStateClass = ASPlayerState::StaticClass();
 	GameStateClass = ASGameState::StaticClass();
 	SpectatorClass = ASSpectatorPawn::StaticClass();
+
+	BotPawnClass = ASZombieCharacter::StaticClass();
 
 	bAllowFriendlyFireDamage = false;
 	bSpawnZombiesAtNight = true;
@@ -34,6 +42,9 @@ ASGameMode::ASGameMode(const FObjectInitializer& ObjectInitializer)
 
 	/* Default team is 1 for players and 0 for enemies */
 	PlayerTeamNum = 1;
+
+	// You may want to make this number dynamic as players survived multiple nights
+	MaxPawnsInZone = 20;
 }
 
 
@@ -107,14 +118,14 @@ void ASGameMode::DefaultTimer()
 				}
 
 				/* Update bot states */
-				if (CurrentIsNight)
-				{
-					WakeAllBots();
-				}
-				else
-				{
-					PassifyAllBots();
-				}
+// 				if (CurrentIsNight)
+// 				{
+// 					WakeAllBots();
+// 				}
+// 				else
+// 				{
+// 					PassifyAllBots();
+// 				}
 			}
 
 			LastIsNight = MyGameState->bIsNight;
@@ -162,7 +173,7 @@ float ASGameMode::ModifyDamage(float Damage, AActor* DamagedActor, struct FDamag
 	ASBaseCharacter* DamagedPawn = Cast<ASBaseCharacter>(DamagedActor);
 	if (DamagedPawn && EventInstigator)
 	{
-		ASPlayerState* DamagedPlayerState = Cast<ASPlayerState>(DamagedPawn->PlayerState);
+		ASPlayerState* DamagedPlayerState = Cast<ASPlayerState>(DamagedPawn->GetPlayerState());
 		ASPlayerState* InstigatorPlayerState = Cast<ASPlayerState>(EventInstigator->PlayerState);
 
 		// Check for friendly fire
@@ -250,7 +261,7 @@ bool ASGameMode::IsSpawnpointPreferred(APlayerStart* SpawnPoint, AController* Co
 	{
 		/* Iterate all pawns to check for collision overlaps with the spawn point */
 		const FVector SpawnLocation = SpawnPoint->GetActorLocation();
-		for (FConstPawnIterator It = GetWorld()->GetPawnIterator(); It; It++)
+		for (TActorIterator<APawn> It(GetWorld()); It; ++It)
 		{
 			ACharacter* OtherPawn = Cast<ACharacter>(*It);
 			if (OtherPawn)
@@ -281,11 +292,16 @@ bool ASGameMode::IsSpawnpointPreferred(APlayerStart* SpawnPoint, AController* Co
 
 void ASGameMode::SpawnNewBot()
 {
-	FActorSpawnParameters SpawnInfo;
-	SpawnInfo.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
+	// Chance for Blueprint to pick a location (for example implementation see BP: SurvivalCoopGameMode asset)
+	FTransform SpawnTransform;
+	if (!FindBotSpawnTransform(SpawnTransform))
+	{
+		// This will fail unless blueprint has implemented this function to handle spawn locations
+		UE_LOG(LogGame, Warning, TEXT("Failed to find bot spawn transform for SpawnNewBot."));
+		return;
+	}
 
-	ASZombieAIController* AIC = GetWorld()->SpawnActor<ASZombieAIController>(SpawnInfo);
-	RestartPlayer(AIC);
+	GetWorld()->SpawnActor<APawn>(BotPawnClass, SpawnTransform);
 }
 
 /* Used by RestartPlayer() to determine the pawn to create and possess when a bot or player spawns */
@@ -309,7 +325,7 @@ bool ASGameMode::CanSpectate_Implementation(APlayerController* Viewer, APlayerSt
 
 void ASGameMode::PassifyAllBots()
 {
-	for (FConstPawnIterator It = GetWorld()->GetPawnIterator(); It; It++)
+	for (TActorIterator<APawn> It(GetWorld()); It; ++It)
 	{
 		ASZombieCharacter* AIPawn = Cast<ASZombieCharacter>(*It);
 		if (AIPawn)
@@ -322,7 +338,7 @@ void ASGameMode::PassifyAllBots()
 
 void ASGameMode::WakeAllBots()
 {
-	for (FConstPawnIterator It = GetWorld()->GetPawnIterator(); It; It++)
+	for (TActorIterator<APawn> It(GetWorld()); It; ++It)
 	{
 		ASZombieCharacter* AIPawn = Cast<ASZombieCharacter>(*It);
 		if (AIPawn)
@@ -336,7 +352,10 @@ void ASGameMode::WakeAllBots()
 void ASGameMode::SpawnBotHandler()
 {
 	if (!bSpawnZombiesAtNight)
+	{
 		return;
+	}
+		
 
 	ASGameState* MyGameState = Cast<ASGameState>(GameState);
 	if (MyGameState)
@@ -344,14 +363,18 @@ void ASGameMode::SpawnBotHandler()
 		/* Only spawn bots during night time */
 		if (MyGameState->GetIsNight())
 		{
-			/* This could be any dynamic number based on difficulty (eg. increasing after having survived a few nights) */
-			const int32 MaxPawns = 10;
+			int32 PawnsInWorld = 0;
+			for (TActorIterator<APawn> It(GetWorld()); It; ++It)
+			{
+				++PawnsInWorld;
+			}
 
 			/* Check number of available pawns (players included) */
-			if (GetWorld()->GetNumPawns() < MaxPawns)
+			if (PawnsInWorld < MaxPawnsInZone)
 			{
 				SpawnNewBot();
 			}
+
 		}
 	}
 }
@@ -414,13 +437,18 @@ void ASGameMode::InitGame(const FString& MapName, const FString& Options, FStrin
 		BaseMutator->InitGame(MapName, Options, ErrorMessage);
 	}
 
+
 	for (TActorIterator<AActor> It(GetWorld(), AActor::StaticClass()); It; ++It)
 	{
 		AActor* Actor = *It;
 		if (!Actor->IsPendingKill())
 		{
-			if (!Actor->IsA(ALevelScriptActor::StaticClass()) && !Actor->IsA(ASMutator::StaticClass()) && Actor->GetRootComponent() != nullptr &&
-				Actor->GetRootComponent()->Mobility != EComponentMobility::Static || (!Actor->IsA(AStaticMeshActor::StaticClass()) && !Actor->IsA(ALight::StaticClass())))
+			// Some classes can't be removed via mutators
+			bool bIsValidClass = !Actor->IsA(ALevelScriptActor::StaticClass()) && !Actor->IsA(ASMutator::StaticClass());
+			// Static actors can't be removed.
+			bool bIsRemovable = Actor->GetRootComponent() && Actor->GetRootComponent()->Mobility != EComponentMobility::Static;
+
+			if (bIsValidClass && bIsRemovable)
 			{
 				// a few type checks being AFTER the CheckRelevance() call is intentional; want mutators to be able to modify, but not outright destroy
 				if (!CheckRelevance(Actor) && !Actor->IsA(APlayerController::StaticClass()))

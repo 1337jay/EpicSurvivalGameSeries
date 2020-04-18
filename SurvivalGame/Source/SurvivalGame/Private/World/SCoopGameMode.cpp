@@ -1,16 +1,17 @@
 // Copyright 1998-2015 Epic Games, Inc. All Rights Reserved.
 
-#include "SurvivalGame.h"
-#include "SCoopGameMode.h"
+
+#include "World/SCoopGameMode.h"
 #include "NavigationSystem.h"
-#include "SPlayerState.h"
-#include "SCharacter.h"
-#include "SGameState.h"
+#include "Player/SPlayerState.h"
+#include "Player/SCharacter.h"
+#include "World/SGameState.h"
+#include "EngineUtils.h"
+#include "Player/SPlayerController.h"
 
 
 
-ASCoopGameMode::ASCoopGameMode(const FObjectInitializer& ObjectInitializer)
-: Super(ObjectInitializer)
+ASCoopGameMode::ASCoopGameMode()
 {
 	/* Disable damage to coop buddies  */
 	bAllowFriendlyFireDamage = false;
@@ -35,7 +36,7 @@ void ASCoopGameMode::RestartPlayer(class AController* NewPlayer)
 	/* Look for a live player to spawn next to */
 	FVector SpawnOrigin = FVector::ZeroVector;
 	FRotator StartRotation = FRotator::ZeroRotator;
-	for (FConstPawnIterator It = GetWorld()->GetPawnIterator(); It; It++)
+	for (TActorIterator<APawn> It(GetWorld()); It; ++It)
 	{
 		ASCharacter* MyCharacter = Cast<ASCharacter>(*It);
 		if (MyCharacter && MyCharacter->IsAlive())
@@ -63,7 +64,7 @@ void ASCoopGameMode::RestartPlayer(class AController* NewPlayer)
 		if (NewPlayer->GetPawn() == nullptr && GetDefaultPawnClassForController(NewPlayer) != nullptr)
 		{
 			FActorSpawnParameters SpawnInfo;
-			SpawnInfo.Instigator = Instigator;
+			SpawnInfo.Instigator = GetInstigator();
 			APawn* ResultPawn = GetWorld()->SpawnActor<APawn>(GetDefaultPawnClassForController(NewPlayer), StartLocation.Location, StartRotation, SpawnInfo);
 			if (ResultPawn == nullptr)
 			{
@@ -157,12 +158,12 @@ void ASCoopGameMode::Killed(AController* Killer, AController* VictimPlayer, APaw
 void ASCoopGameMode::CheckMatchEnd()
 {
 	bool bHasAlivePlayer = false;
-	for (FConstPawnIterator It = GetWorld()->GetPawnIterator(); It; It++)
+	for (TActorIterator<APawn> It(GetWorld()); It; ++It)
 	{
 		ASCharacter* MyPawn = Cast<ASCharacter>(*It);
 		if (MyPawn && MyPawn->IsAlive())
 		{
-			ASPlayerState* PS = Cast<ASPlayerState>(MyPawn->PlayerState);
+			ASPlayerState* PS = Cast<ASPlayerState>(MyPawn->GetPlayerState());
 			if (PS)
 			{
 				if (!PS->bIsABot)

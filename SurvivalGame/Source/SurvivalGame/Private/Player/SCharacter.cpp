@@ -1,15 +1,20 @@
 // Copyright 1998-2015 Epic Games, Inc. All Rights Reserved.
 
-#include "SurvivalGame.h"
-#include "SCharacter.h"
-#include "SUsableActor.h"
-#include "SWeapon.h"
-#include "SWeaponPickup.h"
-#include "SCharacterMovementComponent.h"
-#include "SCarryObjectComponent.h"
-#include "SBaseCharacter.h"
-#include "SPlayerController.h"
-#include "Runtime/Engine/Classes/Animation/AnimInstance.h"
+
+#include "Player/SCharacter.h"
+#include "Items/SUsableActor.h"
+#include "Items/SWeapon.h"
+#include "Items/SWeaponPickup.h"
+#include "Components/SCharacterMovementComponent.h"
+#include "Components/SCarryObjectComponent.h"
+#include "Player/SBaseCharacter.h"
+#include "Player/SPlayerController.h"
+#include "Animation/AnimInstance.h"
+#include "Components/CapsuleComponent.h"
+#include "SurvivalGame/SurvivalGame.h"
+#include "GameFramework/DamageType.h"
+#include "Camera/CameraComponent.h"
+
 
 // Sets default values
 ASCharacter::ASCharacter(const class FObjectInitializer& ObjectInitializer)
@@ -31,16 +36,16 @@ ASCharacter::ASCharacter(const class FObjectInitializer& ObjectInitializer)
 	// Enable crouching
 	MoveComp->GetNavAgentPropertiesRef().bCanCrouch = true;
 
-	CameraBoomComp = ObjectInitializer.CreateDefaultSubobject<USpringArmComponent>(this, TEXT("CameraBoom"));
+	CameraBoomComp = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
 	CameraBoomComp->SocketOffset = FVector(0, 35, 0);
 	CameraBoomComp->TargetOffset = FVector(0, 0, 55);
 	CameraBoomComp->bUsePawnControlRotation = true;
 	CameraBoomComp->SetupAttachment(GetRootComponent());
 
-	CameraComp = ObjectInitializer.CreateDefaultSubobject<UCameraComponent>(this, TEXT("Camera"));
+	CameraComp = CreateDefaultSubobject<UCameraComponent>(TEXT("Camera"));
 	CameraComp->SetupAttachment(CameraBoomComp);
 
-	CarriedObjectComp = ObjectInitializer.CreateDefaultSubobject<USCarryObjectComponent>(this, TEXT("CarriedObjectComp"));
+	CarriedObjectComp = CreateDefaultSubobject<USCarryObjectComponent>(TEXT("CarriedObjectComp"));
 	CarriedObjectComp->SetupAttachment(GetRootComponent());
 
 	MaxUseDistance = 500;
@@ -69,7 +74,7 @@ void ASCharacter::BeginPlay()
 {
 	Super::BeginPlay();
 
-	if (Role == ROLE_Authority)
+	if (HasAuthority())
 	{
 		// Set a timer to increment hunger every interval
 		FTimerHandle Handle;
@@ -208,7 +213,6 @@ ASUsableActor* ASCharacter::GetUsableInView()
 	const FVector TraceEnd = TraceStart + (Direction * MaxUseDistance);
 
 	FCollisionQueryParams TraceParams(TEXT("TraceUsableActor"), true, this);
-	TraceParams.bTraceAsyncScene = true;
 	TraceParams.bReturnPhysicalMaterial = false;
 
 	/* Not tracing complex uses the rough collision instead making tiny objects easier to select. */
@@ -226,7 +230,7 @@ ASUsableActor* ASCharacter::GetUsableInView()
 void ASCharacter::Use()
 {
 	// Only allow on server. If called on client push this request to the server
-	if (Role == ROLE_Authority)
+	if (HasAuthority())
 	{
 		ASUsableActor* Usable = GetUsableInView();
 		if (Usable)
@@ -300,7 +304,7 @@ void ASCharacter::SetIsJumping(bool NewJumping)
 		}
 	}
 
-	if (Role < ROLE_Authority)
+	if (!HasAuthority())
 	{
 		ServerSetIsJumping(NewJumping);
 	}
@@ -483,7 +487,7 @@ FName ASCharacter::GetInventoryAttachPoint(EInventorySlot Slot) const
 
 void ASCharacter::DestroyInventory()
 {
-	if (Role < ROLE_Authority)
+	if (!HasAuthority())
 	{	
 		return;
 	}
@@ -556,7 +560,7 @@ void ASCharacter::EquipWeapon(ASWeapon* Weapon)
 		if (Weapon == CurrentWeapon)
 			return;
 
-		if (Role == ROLE_Authority)
+		if (HasAuthority())
 		{
 			SetCurrentWeapon(Weapon, CurrentWeapon);
 		}
@@ -582,7 +586,7 @@ void ASCharacter::ServerEquipWeapon_Implementation(ASWeapon* Weapon)
 
 void ASCharacter::AddWeapon(class ASWeapon* Weapon)
 {
-	if (Weapon && Role == ROLE_Authority)
+	if (Weapon && HasAuthority())
 	{
 		Weapon->OnEnterInventory(this);
 		Inventory.AddUnique(Weapon);
@@ -598,7 +602,7 @@ void ASCharacter::AddWeapon(class ASWeapon* Weapon)
 
 void ASCharacter::RemoveWeapon(class ASWeapon* Weapon, bool bDestroy)
 {
-	if (Weapon && Role == ROLE_Authority)
+	if (Weapon && HasAuthority())
 	{
 		bool bIsCurrent = CurrentWeapon == Weapon;
 
@@ -733,7 +737,7 @@ void ASCharacter::OnPrevWeapon()
 
 void ASCharacter::DropWeapon()
 {
-	if (Role < ROLE_Authority)
+	if (!HasAuthority())
 	{
 		ServerDropWeapon();
 		return;
@@ -890,7 +894,7 @@ void ASCharacter::StopAllAnimMontages()
 
 void ASCharacter::MakePawnNoise(float Loudness)
 {
-	if (Role == ROLE_Authority)
+	if (HasAuthority())
 	{
 		/* Make noise to be picked up by PawnSensingComponent by the enemy pawns */
 		MakeNoise(Loudness, this, GetActorLocation());
@@ -921,7 +925,7 @@ void ASCharacter::Suicide()
 
 void ASCharacter::KilledBy(class APawn* EventInstigator)
 {
-	if (Role == ROLE_Authority && !bIsDying)
+	if (HasAuthority() && !bIsDying)
 	{
 		AController* Killer = nullptr;
 		if (EventInstigator != nullptr)
